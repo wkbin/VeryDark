@@ -1,30 +1,31 @@
 package top.wkbin.verydark
 
+import android.provider.Settings
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
 class QuickSettingService : TileService() {
 
-    private val isRoot by lazy { RootChecker.isDeviceRooted() }
 
     private var isDark = false
 
     override fun onClick() {
         super.onClick()
-        if (isRoot) {
-            isDark = !isDark
-            SettingsUtils.setReduceBrightColorsActivated(isDark)
-            qsTile.state = if (isDark) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            qsTile.updateTile()
-        }
+        isDark = !isDark
+        Settings.Secure.putInt(
+            contentResolver,
+            "reduce_bright_colors_activated",
+            if (isDark) 1 else 0
+        )
+        qsTile.state = if (isDark) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        qsTile.updateTile()
     }
 
     override fun onStartListening() {
         super.onStartListening()
-        if (isRoot) {
-            isDark = SettingsUtils.getReduceBrightColorsActivated()
-            qsTile.state = if (isDark) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            qsTile.updateTile()
-        }
+        isDark =
+            Settings.Secure.getInt(contentResolver, "reduce_bright_colors_activated", 0) == 1
+        qsTile.state = if (isDark) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        qsTile.updateTile()
     }
 }

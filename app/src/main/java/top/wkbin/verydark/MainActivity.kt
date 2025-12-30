@@ -6,10 +6,12 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,7 +43,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,14 +60,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import rikka.shizuku.Shizuku
-import top.wkbin.verydark.shizuku.ShizukuUtils
 import top.wkbin.verydark.ui.theme.MyApplicationTheme
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
     Shizuku.OnBinderDeadListener, ServiceConnection,
@@ -77,8 +74,10 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
         private const val PERMISSION_CODE = 10001
     }
 
-    private val _userService = MutableStateFlow<IUserService?>(null)
-    val userService: StateFlow<IUserService?> = _userService.asStateFlow()
+    private val mainViewModel by viewModels<MainViewModel>()
+
+    private var userService: IUserService? = null
+
     @Composable
     fun AppBar() {
         Row(
@@ -201,32 +200,27 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
 
     @Composable
     fun MainPage(modifier: Modifier = Modifier) {
-        val userService by userService.collectAsStateWithLifecycle()
+        val context = LocalContext.current
         var isDark by remember { mutableStateOf(false) }
         var currentLight by remember { mutableIntStateOf(0) }
+        val isWork by mainViewModel.isWork.collectAsStateWithLifecycle()
         // 使用derivedStateOf使状态能够响应变化
-        val isDeviceRooted by remember {
-            derivedStateOf { RootChecker.isDeviceRooted() }
-        }
 
-        val isWork by remember {
-            derivedStateOf { isDeviceRooted || userService != null }
-        }
-
-        LaunchedEffect(userService) {
-            isDark = if (userService != null) {
-                val cmd = "settings get secure reduce_bright_colors_activated"
-                (userService?.execArr(cmd.split(" ").toTypedArray())?.toIntOrNull() ?: 0) == 1
-            } else {
-                SettingsUtils.getReduceBrightColorsActivated()
-            }
-            currentLight = if (userService != null) {
-                val cmd = "settings get secure  reduce_bright_colors_level"
-                userService?.execArr(cmd.split(" ").toTypedArray())?.toIntOrNull() ?: 100
-            } else {
-                SettingsUtils.getReduceBrightColorsLevel()
+        LaunchedEffect(isWork) {
+            if (isWork) {
+                isDark = Settings.Secure.getInt(
+                    context.contentResolver,
+                    "reduce_bright_colors_activated",
+                    0
+                ) == 1
+                currentLight = Settings.Secure.getInt(
+                    context.contentResolver,
+                    "reduce_bright_colors_level",
+                    100
+                )
             }
         }
+
         Column(modifier.padding(20.dp)) {
             Spacer(modifier = Modifier.height(5.dp))
             Text(
@@ -237,15 +231,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
 
             Spacer(modifier = Modifier.height(25.dp))
             if (isWork) {
-                if (ShizukuUtils.checkPermission()) {
-                    if (userService != null) {
-                        StatusCard("Shizuku")
-                    } else {
-                        WarningCard("Shizuku服务未启动")
-                    }
-                } else {
-                    StatusCard("Root")
-                }
+                StatusCard()
             } else {
                 WarningCard("权限不足")
             }
@@ -259,13 +245,11 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
                 Text(text = "将屏幕调成极暗")
                 Switch(checked = isDark, enabled = isWork, onCheckedChange = {
                     isDark = it
-                    if (userService != null) {
-                        val cmd =
-                            "settings put secure reduce_bright_colors_activated ${if (isDark) 1 else 0}"
-                        userService?.execArr(cmd.split(" ").toTypedArray())
-                    } else {
-                        SettingsUtils.setReduceBrightColorsActivated(isDark)
-                    }
+                    Settings.Secure.putInt(
+                        context.contentResolver,
+                        "reduce_bright_colors_activated",
+                        if (isDark) 1 else 0
+                    )
                 })
             }
             Spacer(modifier = Modifier.height(25.dp))
@@ -285,13 +269,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
                 valueRange = 0f..100f,
                 onValueChange = {
                     currentLight = it.toInt()
-                    if (userService != null) {
-                        val cmd =
-                            "settings put secure reduce_bright_colors_level ${100 - currentLight}"
-                        userService?.execArr(cmd.split(" ").toTypedArray())
-                    } else {
-                        SettingsUtils.setReduceBrightColorsLevel(100 - currentLight)
-                    }
+                    Settings.Secure.putInt(context.contentResolver,"reduce_bright_colors_level",100 - currentLight)
                 })
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -320,7 +298,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
     }
 
     private fun connectShizuku() {
-        if (_userService.value != null) {
+        if (userService != null) {
             return
         }
 
@@ -328,13 +306,21 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
     }
 
     override fun onBinderDead() {
-        _userService.value = null
+        userService = null
     }
 
     override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
         Toast.makeText(this@MainActivity, "Shizuku服务连接成功", Toast.LENGTH_SHORT).show()
         if (binder != null && binder.pingBinder()) {
-            _userService.value = IUserService.Stub.asInterface(binder)
+            userService = IUserService.Stub.asInterface(binder)
+            if (AuthHelper.hasWriteSecureSettingsPermission(this)) {
+                return
+            }
+
+            val permission = "android.permission.WRITE_SECURE_SETTINGS"
+            val command = "pm grant $packageName $permission"
+            userService?.execLine(command)
+            mainViewModel.checkWork()
         }
     }
 
@@ -364,7 +350,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
             }
 
             Lifecycle.Event.ON_DESTROY -> {
-                if (_userService.value != null && Shizuku.pingBinder()) {
+                if (userService != null && Shizuku.pingBinder()) {
                     Shizuku.unbindUserService(userServiceArgs, this, false)
                 }
             }
@@ -375,7 +361,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
 
 
     @Composable
-    private fun StatusCard(workModel: String) {
+    private fun StatusCard() {
         ElevatedCard(colors = CardDefaults.elevatedCardColors(MaterialTheme.colorScheme.secondaryContainer)) {
             Row(
                 modifier = Modifier
@@ -386,7 +372,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
             ) {
                 Icon(Icons.Outlined.CheckCircle, "工作中")
                 Spacer(modifier = Modifier.width(10.dp))
-                Text(text = "工作模式：$workModel", fontSize = 16.sp)
+                Text(text = "权限已开启", fontSize = 16.sp)
             }
         }
     }
