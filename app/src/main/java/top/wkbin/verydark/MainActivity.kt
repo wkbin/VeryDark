@@ -173,9 +173,6 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
         )
     }
 
-    private val _userService = MutableStateFlow<IUserService?>(null)
-    val userService: StateFlow<IUserService?> = _userService.asStateFlow()
-
     private val userServiceArgs = Shizuku
         .UserServiceArgs(ComponentName(APPLICATION_ID, UserService::class.java.name))
         .daemon(false)
