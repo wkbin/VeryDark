@@ -1,6 +1,7 @@
 package top.wkbin.verydark
 
 import android.content.ComponentName
+import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.os.Bundle
@@ -18,14 +19,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -42,8 +50,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -56,6 +66,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import rikka.shizuku.Shizuku
 import top.wkbin.verydark.shizuku.ShizukuUtils
 import top.wkbin.verydark.ui.theme.MyApplicationTheme
+import androidx.core.net.toUri
 
 class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
     Shizuku.OnBinderDeadListener, ServiceConnection,
@@ -64,6 +75,102 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
     companion object {
         private const val APPLICATION_ID = "top.wkbin.verydark"
         private const val PERMISSION_CODE = 10001
+    }
+
+    private val _userService = MutableStateFlow<IUserService?>(null)
+    val userService: StateFlow<IUserService?> = _userService.asStateFlow()
+    @Composable
+    fun AppBar() {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "极暗",
+                fontFamily = FontFamily.Serif,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+            MenuButton()
+        }
+    }
+
+    @Composable
+    fun MenuButton() {
+        var expanded by remember { mutableStateOf(false) }
+        var showAboutDialog by remember { mutableStateOf(false) }
+        val context = LocalContext.current
+
+        Row {
+            IconButton(onClick = { expanded = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.MoreVert,
+                    contentDescription = "菜单"
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("关于") },
+                    onClick = {
+                        expanded = false
+                        showAboutDialog = true
+                    }
+                )
+            }
+        }
+
+        if (showAboutDialog) {
+            AboutDialog(
+                onDismissRequest = { showAboutDialog = false },
+                onOpenGitHub = {
+                    showAboutDialog = false
+                    val intent = Intent(Intent.ACTION_VIEW)
+                    intent.data = "https://github.com/wkbin/VeryDark".toUri()
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            )
+        }
+    }
+
+    @Composable
+    fun AboutDialog(
+        onDismissRequest: () -> Unit,
+        onOpenGitHub: () -> Unit
+    ) {
+        AlertDialog(
+            onDismissRequest = onDismissRequest,
+            title = { Text(text = "关于") },
+            text = {
+                Column {
+                    Text("极暗 - 调暗屏幕，保护视力")
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "https://github.com/wkbin/VeryDark",
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable { onOpenGitHub() }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = onOpenGitHub) {
+                    Text("打开GitHub")
+                }
+            },
+            dismissButton = {
+                Button(onClick = onDismissRequest) {
+                    Text("关闭")
+                }
+            }
+        )
     }
 
     private val _userService = MutableStateFlow<IUserService?>(null)
@@ -82,7 +189,10 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    topBar = { AppBar() }
+                ) { innerPadding ->
                     MainPage(
                         modifier = Modifier.padding(innerPadding)
                     )
@@ -90,25 +200,6 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
             }
         }
         lifecycle.addObserver(this)
-        initShizuku()
-    }
-
-    private fun initShizuku() {
-        // 添加权限申请监听
-        Shizuku.addRequestPermissionResultListener(this)
-        // Shizuku服务启动时调用该监听
-        Shizuku.addBinderReceivedListenerSticky(this)
-        // Shizuku服务终止时调用该监听
-        Shizuku.addBinderDeadListener(this)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        // 移除权限申请监听
-        Shizuku.removeRequestPermissionResultListener(this)
-        Shizuku.removeBinderReceivedListener(this)
-        Shizuku.removeBinderDeadListener(this)
-        Shizuku.unbindUserService(userServiceArgs, this, true)
     }
 
     @Composable
@@ -140,7 +231,6 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
             }
         }
         Column(modifier.padding(20.dp)) {
-            Text(text = "极暗", fontFamily = FontFamily.Serif, fontSize = 30.sp)
             Spacer(modifier = Modifier.height(5.dp))
             Text(
                 text = "调暗屏幕，看手机时会更舒适",
