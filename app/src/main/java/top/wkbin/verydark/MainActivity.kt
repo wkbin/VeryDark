@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Warning
-import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
@@ -47,28 +46,35 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import rikka.shizuku.Shizuku
 import top.wkbin.verydark.shizuku.ShizukuUtils
 import top.wkbin.verydark.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
     Shizuku.OnBinderDeadListener, ServiceConnection,
-    Shizuku.OnRequestPermissionResultListener {
+    Shizuku.OnRequestPermissionResultListener, LifecycleEventObserver {
 
     companion object {
-        private const val TAG = "MainActivity"
+        private const val APPLICATION_ID = "top.wkbin.verydark"
         private const val PERMISSION_CODE = 10001
     }
 
-    private var _userService = mutableStateOf<IUserService?>(null)
-    private var shizukuServiceState = false
+    private val _userService = MutableStateFlow<IUserService?>(null)
+    val userService: StateFlow<IUserService?> = _userService.asStateFlow()
 
     private val userServiceArgs = Shizuku
-        .UserServiceArgs(ComponentName(BuildConfig.APPLICATION_ID, UserService::class.java.name))
+        .UserServiceArgs(ComponentName(APPLICATION_ID, UserService::class.java.name))
         .daemon(false)
         .processNameSuffix("adb_shell")
-        .debuggable(BuildConfig.DEBUG)
-        .version(BuildConfig.VERSION_CODE)
+        .debuggable(false)
+        .version(1)
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,25 +89,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
                 }
             }
         }
+        lifecycle.addObserver(this)
         initShizuku()
-    }
-
-    /**
-     * 动态申请Shizuku adb shell权限
-     */
-    private fun requestShizukuPermission() {
-        if (Shizuku.isPreV11()) {
-            Toast.makeText(this, "当前shizuku版本不支持动态申请权限", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (ShizukuUtils.checkPermission()) {
-            Toast.makeText(this, "已拥有Shizuku权限", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // 动态申请权限
-        Shizuku.requestPermission(PERMISSION_CODE)
     }
 
     private fun initShizuku() {
@@ -124,13 +113,16 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
 
     @Composable
     fun MainPage(modifier: Modifier = Modifier) {
-        val userService by remember { _userService }
+        val userService by userService.collectAsStateWithLifecycle()
         var isDark by remember { mutableStateOf(false) }
         var currentLight by remember { mutableIntStateOf(0) }
-        val isDeviceRooted = remember { RootChecker.isDeviceRooted() }
-        val isDeviceShizuku = remember { ShizukuUtils.checkPermission() }
+        // 使用derivedStateOf使状态能够响应变化
+        val isDeviceRooted by remember {
+            derivedStateOf { RootChecker.isDeviceRooted() }
+        }
+
         val isWork by remember {
-            derivedStateOf { isDeviceRooted || isDeviceShizuku }
+            derivedStateOf { isDeviceRooted || userService != null }
         }
 
         LaunchedEffect(userService) {
@@ -158,8 +150,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
 
             Spacer(modifier = Modifier.height(25.dp))
             if (isWork) {
-                if (isDeviceShizuku) {
-                    if (shizukuServiceState) {
+                if (ShizukuUtils.checkPermission()) {
+                    if (userService != null) {
                         StatusCard("Shizuku")
                     } else {
                         WarningCard("Shizuku服务未启动")
@@ -229,88 +221,27 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
                     color = Color.Gray
                 )
             }
-
-            if (isDeviceShizuku){
-                Row(
-                    modifier = Modifier
-                        .padding(top = 50.dp)
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Button(onClick = {
-                        judgePermission()
-                    }) {
-                        Text(text = "判断")
-                    }
-                    Button(onClick = {
-                        connectShizuku()
-                    }) {
-                        Text(text = "连接")
-                    }
-                    Button(onClick = {
-                        requestShizukuPermission()
-                    }) {
-                        Text(text = "授权")
-                    }
-                }
-            }
         }
     }
 
-    // 判断权限
-    private fun judgePermission() {
-        if (!shizukuServiceState) {
-            Toast.makeText(this, "Shizuku服务异常", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (ShizukuUtils.checkPermission()) {
-            Toast.makeText(this, "已拥有权限", Toast.LENGTH_SHORT).show()
+    override fun onBinderReceived() {
+        if (Shizuku.checkSelfPermission() == PERMISSION_GRANTED) {
+            connectShizuku()
         } else {
-            Toast.makeText(this, "未拥有权限", Toast.LENGTH_SHORT).show()
+            AuthHelper.requestShizukuPermission(this@MainActivity, PERMISSION_CODE)
         }
     }
 
-    // 请求权限
-    private fun requestPermission() {
-        if (!shizukuServiceState) {
-            Toast.makeText(this, "Shizuku服务异常", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        requestShizukuPermission()
-    }
-
-    // 连接Shizuku服务
     private fun connectShizuku() {
-        if (!shizukuServiceState) {
-            Toast.makeText(this, "Shizuku服务异常", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (!ShizukuUtils.checkPermission()) {
-            Toast.makeText(this, "没有Shizuku权限", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         if (_userService.value != null) {
-            Toast.makeText(this@MainActivity, "已连接Shizuku服务", Toast.LENGTH_SHORT).show()
             return
         }
 
         Shizuku.bindUserService(userServiceArgs, this)
     }
 
-
-    override fun onBinderReceived() {
-        shizukuServiceState = true
-        Toast.makeText(this@MainActivity, "Shizuku服务已启动", Toast.LENGTH_SHORT).show()
-    }
-
     override fun onBinderDead() {
-        shizukuServiceState = false
         _userService.value = null
-        Toast.makeText(this@MainActivity, "Shizuku服务已终止", Toast.LENGTH_SHORT).show()
     }
 
     override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -320,60 +251,84 @@ class MainActivity : ComponentActivity(), Shizuku.OnBinderReceivedListener,
         }
     }
 
-    override fun onServiceDisconnected(name: ComponentName?) {
-        Toast.makeText(this@MainActivity, "Shizuku服务连接断开", Toast.LENGTH_SHORT).show()
-        _userService.value = null
-    }
+    override fun onServiceDisconnected(name: ComponentName?) {}
 
     override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
         if (grantResult == PERMISSION_GRANTED) {
-            Toast.makeText(this@MainActivity, "Shizuku授权成功", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this@MainActivity, "Shizuku授权失败", Toast.LENGTH_SHORT).show()
+            connectShizuku()
         }
     }
-}
 
-
-@Composable
-private fun StatusCard(workModel: String) {
-    ElevatedCard(colors = CardDefaults.elevatedCardColors(MaterialTheme.colorScheme.secondaryContainer)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(80.dp)
-                .padding(24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Outlined.CheckCircle, "工作中")
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(text = "工作模式：$workModel", fontSize = 16.sp)
-        }
-    }
-}
-
-@Composable
-fun WarningCard(
-    message: String, color: Color = MaterialTheme.colorScheme.error, onClick: (() -> Unit)? = null
-) {
-    ElevatedCard(
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = color
-        )
+    override fun onStateChanged(
+        source: LifecycleOwner,
+        event: Lifecycle.Event
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(80.dp)
-                .then(onClick?.let { Modifier.clickable { it() } } ?: Modifier)
-                .padding(24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Outlined.Warning, null)
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = message, style = MaterialTheme.typography.bodyMedium
+        when (event) {
+            Lifecycle.Event.ON_START -> {
+                Shizuku.addRequestPermissionResultListener(this)
+                Shizuku.addBinderReceivedListenerSticky(this)
+                Shizuku.addBinderDeadListener(this)
+            }
+
+            Lifecycle.Event.ON_STOP -> {
+                Shizuku.removeRequestPermissionResultListener(this)
+                Shizuku.removeBinderReceivedListener(this)
+                Shizuku.removeBinderDeadListener(this)
+            }
+
+            Lifecycle.Event.ON_DESTROY -> {
+                if (_userService.value != null && Shizuku.pingBinder()) {
+                    Shizuku.unbindUserService(userServiceArgs, this, false)
+                }
+            }
+
+            else -> {}
+        }
+    }
+
+
+    @Composable
+    private fun StatusCard(workModel: String) {
+        ElevatedCard(colors = CardDefaults.elevatedCardColors(MaterialTheme.colorScheme.secondaryContainer)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(80.dp)
+                    .padding(24.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Outlined.CheckCircle, "工作中")
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(text = "工作模式：$workModel", fontSize = 16.sp)
+            }
+        }
+    }
+
+    @Composable
+    fun WarningCard(
+        message: String,
+        color: Color = MaterialTheme.colorScheme.error,
+        onClick: (() -> Unit)? = null
+    ) {
+        ElevatedCard(
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = color
             )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(80.dp)
+                    .then(onClick?.let { Modifier.clickable { it() } } ?: Modifier)
+                    .padding(24.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Outlined.Warning, null)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = message, style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }
